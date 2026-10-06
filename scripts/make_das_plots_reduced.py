@@ -44,6 +44,7 @@ except ImportError:
     sys.exit(1)
 
 
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -58,6 +59,8 @@ DS_LABELS = {
     "llp_addon":          "LLP H→4μ",
     "minbias":            "MinBias",
 }
+DS_SAMPLES = ["single_muon_flatpt", "displaced_lowpt", "displaced_midpt",
+             "dy_prompt", "llp_addon", "minbias"]
 PT_CUT_LABELS = {
     0:  "no pT cut",
     5:  "pred pT > 5 GeV",
@@ -121,7 +124,6 @@ def load_model(ckpt_path: Path, device: torch.device):
     model.load_state_dict(ckpt["model"])
     model.to(device).eval()
     return model
-
 
 # ---------------------------------------------------------------------------
 # MinBias pT-gated scan
@@ -187,7 +189,7 @@ def run_minbias_pt_scan(
 
         all_logits.append(torch.cat(logits_l))
         all_ptpred.append(torch.cat(pt_l))
-        all_en.append(shard["meta_event_num"])
+        #all_en.append(shard["meta_event_num"])
 
     logits_all = torch.cat(all_logits).numpy()   # (N, K)
     ptpred_all = torch.cat(all_ptpred).numpy()   # (N, K)
@@ -265,9 +267,8 @@ def plot_before_after(unfiltered: dict, filtered: dict, out_path: Path) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels([DS_LABELS[d] for d in ds_list], rotation=15, ha="right", fontsize=9)
     ax.set_ylabel("Candidate efficiency", fontsize=11)
-    ax.set_title("DAS efficiency: unfiltered vs. overlap-filtered\n(TPS EdgeCompat h64, frozen FP32)", fontsize=11)
+    ax.set_title("Efficiency: unfiltered vs. overlap-filtered", fontsize=11)
     ax.set_ylim(0, 1.05)
-    ax.axhline(0.9, color="gray", linestyle="--", linewidth=0.8, label="G1/G2 reference (~0.91)")
     ax.legend(fontsize=9)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
     ax.grid(axis="y", alpha=0.3)
@@ -317,11 +318,10 @@ def plot_eff_vs_pt(filtered: dict, out_path: Path) -> None:
             ax.errorbar(pts, effs, yerr=errs, fmt="o-", color=COLORS[i],
                         label=DS_LABELS[ds], capsize=3, markersize=4, linewidth=1.5)
 
-    ax.axhline(0.90, color="gray", linestyle="--", linewidth=0.8, label="G1/G2 reference")
     ax.axvline(10,   color="lightgray", linestyle=":", linewidth=1.0, label="pT = 10 GeV")
     ax.set_xlabel("Gen muon pT [GeV]", fontsize=11)
     ax.set_ylabel("Candidate efficiency (overlap-filtered)", fontsize=11)
-    ax.set_title("DAS efficiency vs gen pT — overlap muons only\n(TPS EdgeCompat h64, frozen FP32)", fontsize=11)
+    ax.set_title("Efficiency vs gen pT — overlap muons only", fontsize=11)
     ax.set_xscale("log")
     ax.set_xlim(1.5, 250)
     ax.set_ylim(0, 1.05)
@@ -359,7 +359,7 @@ def plot_minbias_accept(mb_scan: dict, out_path: Path) -> None:
         ax.axvline(0.0, color="gray", linestyle=":", linewidth=1.0, label="thr = 0.0")
         ax.set_xlabel("Logit threshold", fontsize=11)
         ax.set_ylabel(ylabel, fontsize=10)
-        ax.set_title(f"MinBias — {title}\n(TPS EdgeCompat h64)", fontsize=10)
+        ax.set_title(f"MinBias — {title}", fontsize=10)
         ax.legend(fontsize=8)
         ax.set_xlim(-3, 3)
         ax.set_ylim(0, None)
@@ -509,11 +509,9 @@ def plot_eff_vs_dxy(displaced_data: dict, out_path: Path) -> None:
             ax.errorbar(mids, effs, yerr=errs, fmt="o-", color=COLORS[i],
                         label=DS_LABELS[ds], capsize=3, markersize=5, linewidth=1.8)
 
-    ax.axhline(0.90, color="gray", linestyle="--", linewidth=0.8, label="G3/G4 reference")
     ax.set_xlabel("|dxy| [cm]", fontsize=11)
     ax.set_ylabel("Candidate efficiency (overlap-filtered)", fontsize=11)
-    ax.set_title("Efficiency vs |dxy| — displaced and LLP samples\n"
-                 "(TPS EdgeCompat h64, frozen FP32, logit > 0.0)", fontsize=11)
+    ax.set_title("Efficiency vs |dxy| — displaced and LLP samples", fontsize=11)
     ax.set_xscale("log")
     ax.set_xlim(0.3, 400)
     ax.set_ylim(0, 1.05)
@@ -554,12 +552,10 @@ def plot_eff_vs_nstubs(displaced_data: dict, out_path: Path) -> None:
                 ax.annotate(f"n={n}", (x, eff), textcoords="offset points",
                             xytext=(0, 6), ha="center", fontsize=6, color=COLORS[i])
 
-    ax.axhline(0.90, color="gray", linestyle="--", linewidth=0.8, label="target")
     ax.axvline(4,    color="lightgray", linestyle=":", linewidth=1.0, label="4 stubs")
     ax.set_xlabel("Number of TPS stubs in window", fontsize=11)
     ax.set_ylabel("Candidate efficiency (overlap-filtered)", fontsize=11)
-    ax.set_title("Efficiency vs TPS stub count — displaced and LLP samples\n"
-                 "(diagnostic: low eff at low stub count = sparse input)", fontsize=11)
+    ax.set_title("Efficiency vs TPS stub count — displaced and LLP samples", fontsize=11)
     ax.set_xlim(0.5, 16)
     ax.set_ylim(0, 1.05)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
@@ -570,51 +566,6 @@ def plot_eff_vs_nstubs(displaced_data: dict, out_path: Path) -> None:
     plt.close(fig)
     print(f"  Saved: {out_path}")
 
-
-# ---------------------------------------------------------------------------
-# Plot 6: MinBias event accept vs predicted-pT cut at fixed threshold 0.0
-# ---------------------------------------------------------------------------
-
-def plot_minbias_vs_pt_cut(mb_scan: dict, out_path: Path) -> None:
-    curves  = mb_scan["curves"]
-    thrs    = np.array(mb_scan["thresholds"])
-    # Index closest to 0.0
-    thr0_idx = int(np.argmin(np.abs(thrs - 0.0)))
-
-    pt_cuts = sorted(int(k) for k in curves)
-    win_fps  = [curves[pc]["win_fp"][thr0_idx]  for pc in pt_cuts]
-    evt_accs = [curves[pc]["evt_acc"][thr0_idx] for pc in pt_cuts]
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(pt_cuts, win_fps,  "o-", color="#1f77b4", linewidth=2,
-            markersize=7, label="Window-level FP  (model-local)")
-    ax.plot(pt_cuts, evt_accs, "s--", color="#d62728", linewidth=2,
-            markersize=7, label="Event-level OR accept  (trigger proxy)")
-
-    for x, yw, ye in zip(pt_cuts, win_fps, evt_accs):
-        ax.annotate(f"{yw:.3f}", (x, yw), textcoords="offset points",
-                    xytext=(4, 6), fontsize=8, color="#1f77b4")
-        ax.annotate(f"{ye:.3f}", (x, ye), textcoords="offset points",
-                    xytext=(4, -12), fontsize=8, color="#d62728")
-
-    ax.set_xlabel("Predicted-pT cut on firing candidate [GeV]", fontsize=11)
-    ax.set_ylabel("Accept rate", fontsize=11)
-    ax.set_title("MinBias background accept vs predicted-pT cut\n"
-                 "(logit threshold = 0.0  |  TPS EdgeCompat h64, frozen FP32)", fontsize=11)
-    ax.set_xticks(pt_cuts)
-    ax.set_ylim(0, None)
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
-    ax.legend(fontsize=10)
-    ax.grid(alpha=0.3)
-    ax.text(0.97, 0.95,
-            "Event accept inflated by multi-processor OR\nwithout BX/quality/duplicate-removal cuts",
-            transform=ax.transAxes, fontsize=8, va="top", ha="right",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow",
-                      edgecolor="gray", alpha=0.8))
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"  Saved: {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +597,7 @@ def _read_nano_omtf(nano_path: Path) -> list[dict]:
     avail = set(tree.keys())
 
     branches = ["event", "nGenMuon", "GenMuon_pt", "GenMuon_eta",
-                "nomtf", "omtf_hwPt", "omtf_hwEta"]
+                "nomtf", "omtf_hwPt", "omtf_hwPtUnc", "omtf_hwEta"]
     if "GenMuon_etaSt2" in avail:
         branches.append("GenMuon_etaSt2")
     arr = tree.arrays(branches, library="ak")
@@ -674,18 +625,26 @@ def _read_nano_omtf(nano_path: Path) -> list[dict]:
         omtf_fires_pt10 = False
         omtf_fires_pt15 = False
         omtf_fires_pt20 = False
+        omtf_fires_Uncpt10 = False
+        omtf_fires_Uncpt15 = False
+        omtf_fires_Uncpt20 = False
 
         if nomtf > 0:
-            hw_pts  = ak.to_numpy(arr["omtf_hwPt"][i]).astype(np.float32)
+            hw_pts     = ak.to_numpy(arr["omtf_hwPt"][i]).astype(np.float32)
+            hw_pts_Unc = ak.to_numpy(arr["omtf_hwPtUnc"][i]).astype(np.float32)
             hw_etas = np.abs(ak.to_numpy(arr["omtf_hwEta"][i]).astype(np.float32))
             # require candidate in OMTF overlap eta band
             in_ov_cand = (hw_etas >= _OMTF_ETA_HW_LO) & (hw_etas <= _OMTF_ETA_HW_HI)
             if in_ov_cand.any():
-                ov_pts = hw_pts[in_ov_cand] * _HW_PT_LSB
+                ov_pts     = hw_pts[in_ov_cand] * _HW_PT_LSB
+                ov_pts_Unc = hw_pts_Unc[in_ov_cand] * _HW_PT_LSB
                 omtf_fires_any  = True
                 omtf_fires_pt10 = bool((ov_pts >= 10).any())
                 omtf_fires_pt15 = bool((ov_pts >= 15).any())
                 omtf_fires_pt20 = bool((ov_pts >= 20).any())
+                omtf_fires_Uncpt10 = bool((ov_pts_Unc >= 10).any())
+                omtf_fires_Uncpt15 = bool((ov_pts_Unc >= 15).any())
+                omtf_fires_Uncpt20 = bool((ov_pts_Unc >= 20).any())
 
         events.append({
             "n_in_overlap":    n_in_ov,
@@ -694,6 +653,9 @@ def _read_nano_omtf(nano_path: Path) -> list[dict]:
             "omtf_pt10":       omtf_fires_pt10,
             "omtf_pt15":       omtf_fires_pt15,
             "omtf_pt20":       omtf_fires_pt20,
+            "omtf_Uncpt10":    omtf_fires_Uncpt10,
+            "omtf_Uncpt15":    omtf_fires_Uncpt15,
+            "omtf_Uncpt20":    omtf_fires_Uncpt20,
         })
     return events
 
@@ -733,9 +695,16 @@ def compute_omtf_stats(das_prod_dir: Path,
             if n == 0:
                 pt_eff_any.append(None); pt_eff_pt10.append(None); pt_eff_pt15.append(None)
                 continue
-            pt_eff_any.append(sum(1 for e in denom if e["omtf_any"])  / n)
-            pt_eff_pt10.append(sum(1 for e in denom if e["omtf_pt10"]) / n)
-            pt_eff_pt15.append(sum(1 for e in denom if e["omtf_pt15"]) / n)
+            if ds in DISPLACED_DS:
+                # For displaced muon samples we consider the "Unconstrained" hardware pT (omtf_hwPtUnc) 
+                pt_eff_any.append(sum(1 for e in denom if e["omtf_any"])  / n)
+                pt_eff_pt10.append(sum(1 for e in denom if e["omtf_Uncpt10"]) / n)
+                pt_eff_pt15.append(sum(1 for e in denom if e["omtf_Uncpt15"]) / n)
+            else:
+                pt_eff_any.append(sum(1 for e in denom if e["omtf_any"])  / n)
+
+                pt_eff_pt10.append(sum(1 for e in denom if e["omtf_pt10"]) / n)
+                pt_eff_pt15.append(sum(1 for e in denom if e["omtf_pt15"]) / n)
 
         # Overall accept (for MinBias: all events; for signal: overlap events)
         total = len(all_events)
@@ -803,7 +772,7 @@ def plot_omtf_comparison(omtf_stats: dict, filtered_eval: dict,
 
     ax_eff.set_xticks(x)
     ax_eff.set_xticklabels([DS_LABELS[d] for d in compare_ds], rotation=15, ha="right", fontsize=9)
-    ax_eff.set_ylabel("Event-level efficiency (overlap-filtered)", fontsize=10)
+    ax_eff.set_ylabel("Accept Rate (overlap-filtered)", fontsize=10)
     ax_eff.set_title("ML model vs current OMTF/GMT — DAS samples\n"
                      "(overlap filter: gen muon |η| ∈ [0.82, 1.24])", fontsize=11)
     ax_eff.set_ylim(0, 1.1)
@@ -847,7 +816,421 @@ def plot_omtf_comparison(omtf_stats: dict, filtered_eval: dict,
     plt.close(fig)
     print(f"  Saved: {out_path}")
 
+# ---------------------------------------------------------------------------
+# Plot: Predicted Scores
+# ---------------------------------------------------------------------------
 
+@torch.no_grad()
+def run_class(
+    model,
+    ds_name,
+    cache_dir: Path,
+    device: torch.device,
+    batch_size: int = 2048,
+    thr: float = 0.0
+):
+    """
+    Compute predicted scores in [0, 1] for the DAS Dataset.
+    """
+    ds_dir = cache_dir / ds_name
+    shards = sorted(ds_dir.glob("shard_*.pt"))
+    print(f"  [{ds_name} scan] {len(shards)} shards ...", flush=True)
+
+    all_logits:  list[torch.Tensor] = []
+    all_en:      list[torch.Tensor] = []
+
+    for sp in shards:
+        shard = torch.load(sp, map_location="cpu", weights_only=False)
+        n = int(shard["stubs"].shape[0])
+        logits_l = []
+
+        for i in range(0, n, batch_size):
+            j = min(i + batch_size, n)
+            stubs = shard["stubs"][i:j].to(device)
+            vm    = shard["valid_mask"][i:j].to(device)
+            if model.name == "edge_compat_edges":
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                out = model(stubs, vm, edge_node1, edge_node2, edge_mask)
+            elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)             # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                edge_index = torch.stack([src_node, dst_node], dim=0).to(device)               # (2, E)
+                edge_attr  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,).to(device)                                 # (E, 2 * F)
+                out = model(stubs, vm, edge_index, edge_attr)
+            else:
+                out = model(stubs, vm)
+            logits_l.append(out["candidate_logits"].cpu())
+
+        all_logits.append(torch.cat(logits_l))
+        #all_en.append(shard["meta_event_num"])
+
+    logits_all = torch.cat(all_logits).numpy()   # (N, K)
+    en_all     = torch.cat(all_en).numpy().astype(str)
+    
+    muon_logits = {}
+    nomuon_logits = {}
+
+    fires_muon = (logits_all > thr).any(axis=-1)  # (N,)
+
+    for i in range(len(fires_muon)):
+        if fires_muon[i] == True:
+            muon_logits[en_all[i]] = logits_all[i]
+        else:
+            nomuon_logits[en_all[i]] = logits_all[i]
+    
+    return muon_logits, nomuon_logits
+
+def plot_predicted_scores(muons, nomuons, cache_dir, ds_name, out_path, thr = 0):
+    ds_dir = cache_dir / ds_name
+    shards = sorted(ds_dir.glob("shard_*.pt"))
+    print(f"  [{ds_name} scan] {len(shards)} shards ...", flush=True)
+
+    all_target_track_id: list[torch.Tensor] = []
+    all_en: list[torch.Tensor]    = []
+
+    for sp in shards:
+        shard = torch.load(sp, map_location="cpu", weights_only=False)
+        all_target_track_id.append(shard["target_track_id"])
+        all_en.append(shard["meta_event_num"])
+        #print("shard keys", shard.keys())
+        print("meta_n_gen", shard["meta_n_gen"])
+    
+    target_track_id_all = torch.cat(all_target_track_id).numpy()
+    en_all    = torch.cat(all_en).numpy().astype(str)
+
+    true_muons = (target_track_id_all != thr).any(axis=-1)  # (N,)
+
+    muon_tp_logits = []
+    muon_fp_logits = []
+    muon_tn_logits = []
+    muon_fn_logits = []
+    for event_num, is_muon in zip(en_all, true_muons):
+        if is_muon == True:
+            if event_num in muons:
+                muon_tp_logits.append(muons[event_num][0])
+            else:
+                muon_fn_logits.append(nomuons[event_num][0])
+        else:
+            if event_num in nomuons:
+                muon_tn_logits.append(nomuons[event_num][0])
+            else:
+                muon_fp_logits.append(muons[event_num][0])
+    
+    lens = {"tp": len(muon_tp_logits), "fn": len(muon_fn_logits), "tn": len(muon_tn_logits), "fp": len(muon_fp_logits),}
+    all_logits = torch.tensor(muon_tp_logits + muon_fn_logits + muon_tn_logits + muon_fp_logits)
+    all_scores = torch.sigmoid(all_logits)
+    i = 0
+    muon_tp = all_scores[i:i+lens["tp"]]
+    i += lens["tp"]
+    muon_fn = all_scores[i:i+lens["fn"]]
+    i += lens["fn"]
+    muon_tn = all_scores[i:i+lens["tn"]]
+    i += lens["tn"]
+    muon_fp = all_scores[i:i+lens["fp"]]
+    
+    bins = np.linspace(0, 1, 101)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    trues  = torch.cat([muon_tp, muon_fn])
+    falses = torch.cat([muon_tn, muon_fp])
+    ax.hist(trues.numpy(), bins=bins, histtype='step', density=True, color='orange', label='True muons')
+
+    ax.hist(falses.numpy(), bins=bins, histtype='step', density=True, color='blue', label='No muons')
+
+    ax.set_ylabel("Frequency", fontsize=11)
+    ax.set_title(f"Predicted scores {ds_name}", fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+    return 
+
+@torch.no_grad()
+def plot_scores(model, cache_dir, ds_name, out_path, device, batch_size):
+    ds_dir = cache_dir / ds_name
+    shards = sorted(ds_dir.glob("shard_*.pt"))
+    print(f"  [{ds_name} scan] {len(shards)} shards ...", flush=True)
+
+    all_logits:  list[torch.Tensor] = []
+
+    for sp in shards:
+        shard = torch.load(sp, map_location="cpu", weights_only=False)
+        n = int(shard["stubs"].shape[0])
+        logits_l = []
+
+        for i in range(0, n, batch_size):
+            j = min(i + batch_size, n)
+            stubs = shard["stubs"][i:j].to(device)
+            vm    = shard["valid_mask"][i:j].to(device)
+            if model.name == "edge_compat_edges":
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                out = model(stubs, vm, edge_node1, edge_node2, edge_mask)
+            elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)             # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                edge_index = torch.stack([src_node, dst_node], dim=0).to(device)               # (2, E)
+                edge_attr  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,).to(device)                                 # (E, 2 * F)
+                out = model(stubs, vm, edge_index, edge_attr)
+            else:
+                out = model(stubs, vm)
+            logits_l.append(out["candidate_logits"].cpu())
+
+        all_logits.append(torch.cat(logits_l))
+    
+    logits_all = torch.cat(all_logits).numpy()   # (N, K)
+ 
+    muon1 = []
+    muon2 = []
+    muon3 = []
+    for i in range(len(logits_all)):
+        muon1.append(logits_all[i][0])
+        muon2.append(logits_all[i][1])
+        muon3.append(logits_all[i][2])
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(muon1, histtype='step', density=True, color='orange', label='1 cand')
+    #ax.hist(muon2, histtype='step', density=True, color='blue', label='2 cands')
+    #ax.hist(muon3, histtype='step', density=True, color='red', label='3 cands or more')
+
+    ax.set_ylabel("Frequency", fontsize=11)
+    ax.set_title(f"Predicted scores {ds_name}", fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+    return 
+
+
+
+@torch.no_grad()
+def plot_scores_gen_muons(model, cache_dir, ds_name, out_path, device, batch_size):
+    ds_dir = cache_dir / ds_name
+    shards = sorted(ds_dir.glob("shard_*.pt"))
+    print(f"  [{ds_name} scan] {len(shards)} shards ...", flush=True)
+
+    all_logits:  list[torch.Tensor] = []
+    all_ov_sig:  list[torch.Tensor] = []
+    all_has_tgt: list[torch.Tensor] = []
+    all_en:      list[torch.Tensor] = []
+
+    for sp in shards:
+        shard = torch.load(sp, map_location="cpu", weights_only=False)
+        n = int(shard["stubs"].shape[0])
+        logits_l, ov_l, tgt_l = [], [], []
+
+        for i in range(0, n, batch_size):
+            j = min(i + batch_size, n)
+            stubs = shard["stubs"][i:j].to(device)
+            vm    = shard["valid_mask"][i:j].to(device)
+            nl    = shard["node_label"][i:j].to(device)
+            gpt_b = shard["gen_pt"][i:j].to(device)
+            if model.name == "edge_compat_edges":
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                out = model(stubs, vm, edge_node1, edge_node2, edge_mask)
+            elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)             # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                edge_index = torch.stack([src_node, dst_node], dim=0).to(device)               # (2, E)
+                edge_attr  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,).to(device)                                 # (E, 2 * F)
+                out = model(stubs, vm, edge_index, edge_attr)
+            else:
+                out = model(stubs, vm)
+            logits_l.append(out["candidate_logits"].cpu())
+            ov_l.append(overlap_signal_mask(stubs, nl, vm).cpu())
+            tgt_l.append((gpt_b.max(dim=-1).values > 0).cpu())
+
+
+        all_logits.append(torch.cat(logits_l))
+        all_ov_sig.append(torch.cat(ov_l))
+        all_has_tgt.append(torch.cat(tgt_l))
+        all_en.append(shard["meta_event_num"])
+
+        
+    logits_all   = torch.cat(all_logits).numpy()   # (N, K)
+    ov_all       = torch.cat(all_ov_sig).numpy()
+    has_tgt_all  = torch.cat(all_has_tgt).numpy()
+    en_full      = torch.cat(all_en).numpy().astype(np.int64)
+
+    muon1 = []
+    muon2 = []
+    muon3 = []
+    for i in range(len(logits_all)):
+        if (bool(ov_all[i]) == True and bool(has_tgt_all[i] == True)):
+            muon1.append(logits_all[i][0])
+            muon2.append(logits_all[i][1])
+            muon3.append(logits_all[i][2])
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(muon1, histtype='step', density=True, color='orange', label='1 cand')
+    #ax.hist(muon2, histtype='step', density=True, color='blue', label='2 cands')
+    #ax.hist(muon3, histtype='step', density=True, color='red', label='3 cands or more')
+
+    ax.set_ylabel("Frequency", fontsize=11)
+    ax.set_title(f"Predicted scores {ds_name}", fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+    return 
+
+
+@torch.no_grad()
+def plot_scores_gen_muons_per_event(model, cache_dir, ds_name, out_path, device, batch_size):
+    ds_dir = cache_dir / ds_name
+    shards = sorted(ds_dir.glob("shard_*.pt"))
+    print(f"  [{ds_name} scan] {len(shards)} shards ...", flush=True)
+
+    all_logits:  list[torch.Tensor] = []
+    all_ov_sig:  list[torch.Tensor] = []
+    all_has_tgt: list[torch.Tensor] = []
+    all_en:      list[torch.Tensor] = []
+
+    for sp in shards:
+        shard = torch.load(sp, map_location="cpu", weights_only=False)
+        n = int(shard["stubs"].shape[0])
+        logits_l, ov_l, tgt_l = [], [], []
+
+        for i in range(0, n, batch_size):
+            j = min(i + batch_size, n)
+            stubs = shard["stubs"][i:j].to(device)
+            vm    = shard["valid_mask"][i:j].to(device)
+            nl    = shard["node_label"][i:j].to(device)
+            gpt_b = shard["gen_pt"][i:j].to(device)
+            if model.name == "edge_compat_edges":
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                out = model(stubs, vm, edge_node1, edge_node2, edge_mask)
+            elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)             # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                edge_index = torch.stack([src_node, dst_node], dim=0).to(device)               # (2, E)
+                edge_attr  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,).to(device)                                 # (E, 2 * F)
+                out = model(stubs, vm, edge_index, edge_attr)
+            else:
+                out = model(stubs, vm)
+            logits_l.append(out["candidate_logits"].cpu())
+            ov_l.append(overlap_signal_mask(stubs, nl, vm).cpu())
+            tgt_l.append((gpt_b.max(dim=-1).values > 0).cpu())
+
+
+        all_logits.append(torch.cat(logits_l))
+        all_ov_sig.append(torch.cat(ov_l))
+        all_has_tgt.append(torch.cat(tgt_l))
+        all_en.append(shard["meta_event_num"])
+
+        
+    logits_all  = torch.cat(all_logits).numpy()   # (N, K)
+    ov_all      = torch.cat(all_ov_sig).numpy()
+    has_tgt_all = torch.cat(all_has_tgt).numpy()
+    en_all      = torch.cat(all_en).numpy().astype(np.int64)
+
+    event_dict: dict[tuple, dict] = defaultdict(
+        lambda: {"logits": [-999.0, -999.0, -999.0], "ov_sig": False, "has_tgt": False}
+    )
+    file_id = 0
+    prev_en = en_all[0]
+    for i in range(len(en_all)):
+        en = int(en_all[i])
+        if en < prev_en:
+            file_id += 1
+        prev_en = en
+        key = (file_id, en)
+        ev  = event_dict[key]
+        ev["logits"]  = max(logits_all[i], ev["logits"], key=lambda x: x[0])
+        ev["ov_sig"]  = ev["ov_sig"]  or bool(ov_all[i])
+        ev["has_tgt"] = ev["has_tgt"] or bool(has_tgt_all[i])
+
+    evs           = list(event_dict.values())
+
+    muon1 = []
+    muon2 = []
+    muon3 = []
+    for e in evs:
+        if (e["ov_sig"] == True and e["has_tgt"] == True):
+            muon1.append(e["logits"][0])
+            muon2.append(e["logits"][1])
+            muon3.append(e["logits"][2])
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(muon1, histtype='step', density=True, color='orange', label='1 cand')
+    #ax.hist(muon2, histtype='step', density=True, color='blue', label='2 cands')
+    #ax.hist(muon3, histtype='step', density=True, color='red', label='3 cands or more')
+
+    ax.set_ylabel("Frequency", fontsize=11)
+    ax.set_title(f"Predicted scores {ds_name}", fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+    return 
+
+    
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -872,15 +1255,15 @@ def main() -> None:
 
     unfiltered = json.loads(args.unfiltered.read_text())
     filtered   = json.loads(args.filtered.read_text())
-
+    """
     print("=== Plot 1: before/after eta filter ===")
     plot_before_after(unfiltered, filtered,
                       args.output_dir / "plot1_before_after_eta_filter.png")
-
+    
     print("=== Plot 2: efficiency vs gen pT ===")
     plot_eff_vs_pt(filtered,
                    args.output_dir / "plot2_eff_vs_pt.png")
-
+    
     print("=== MinBias pT-gated scan (model inference) ===")
     device = torch.device(args.device)
     model  = load_model(args.checkpoint, device)
@@ -898,7 +1281,7 @@ def main() -> None:
     print("=== Plot 3: MinBias accept vs threshold ===")
     plot_minbias_accept(mb_scan,
                         args.output_dir / "plot3_minbias_accept_vs_threshold.png")
-
+    
     print("=== Collecting displaced/LLP arrays (model inference) ===")
     displaced_data = collect_displaced_arrays(
         model, args.cache_dir, DISPLACED_DS, device, args.batch_size)
@@ -910,11 +1293,7 @@ def main() -> None:
     print("=== Plot 5: efficiency vs TPS stub count ===")
     plot_eff_vs_nstubs(displaced_data,
                        args.output_dir / "plot5_eff_vs_nstubs.png")
-
-    print("=== Plot 6: MinBias accept vs predicted-pT cut ===")
-    plot_minbias_vs_pt_cut(mb_scan,
-                           args.output_dir / "plot6_minbias_vs_pt_cut.png")
-
+    """
     print("=== Computing OMTF candidate efficiency from nano files ===")
     all_ds_for_omtf = SIGNAL_DS + ["minbias"]
     omtf_stats = compute_omtf_stats(args.das_prod_dir, all_ds_for_omtf)
@@ -926,6 +1305,35 @@ def main() -> None:
     omtf_path = args.output_dir / "omtf_stats.json"
     omtf_path.write_text(json.dumps(omtf_stats, indent=2))
     print(f"  OMTF stats saved: {omtf_path}")
+
+    """
+    device = torch.device(args.device)
+    model  = load_model(args.checkpoint, device)
+
+    for i, ds in enumerate(DISPLACED_DS):
+        print("Running on sample", ds)
+        muons, nomuons = run_class(model, ds, args.cache_dir, device, args.batch_size)
+        output_ds_dir  = args.output_dir / "plot_predicted_scores_" 
+        output_ds_path = str(output_ds_dir) + ds + ".png" 
+        plot_predicted_scores(muons, nomuons, args.cache_dir, ds, output_ds_path)
+    
+    print("Running on MinBias sample")
+    muons, nomuons = run_class(model, "minbias", args.cache_dir, device, args.batch_size)
+    plot_predicted_scores(muons, nomuons, args.cache_dir, "minbias", args.output_dir / "plot_predicted_scores_minbias.png")
+    
+
+    for i, ds in enumerate(DS_SAMPLES):
+        print("Running on sample", ds)
+        output_ds_dir  = args.output_dir / "plot_scores_" 
+        output_ds_path = str(output_ds_dir) + ds + ".png" 
+        plot_scores(model, args.cache_dir, ds, output_ds_path, device, args.batch_size)
+        output_ds_dir  = args.output_dir / "plot_scores_gen_muons_" 
+        output_ds_path = str(output_ds_dir) + ds + ".png" 
+        plot_scores_gen_muons(model, args.cache_dir, ds, output_ds_path, device, args.batch_size)
+        output_ds_dir  = args.output_dir / "plot_scores_gen_muons_per_event_" 
+        output_ds_path = str(output_ds_dir) + ds + ".png" 
+        plot_scores_gen_muons_per_event(model, args.cache_dir, ds, output_ds_path, device, args.batch_size)
+    """
 
     print(f"\nAll plots written to: {args.output_dir}")
 

@@ -1,5 +1,5 @@
 universe    = vanilla
-initialdir  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls
+initialdir  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study
 should_transfer_files = NO
 getenv = True
 request_cpus   = 4
@@ -7,11 +7,11 @@ request_memory = 24G
 request_disk   = 4G
 request_gpus   = 1
 +UseNvidiaA100 = True
-log    = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/g9g10_train.$(Cluster).$(Process).log
-output = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/g9g10_train.$(Cluster).$(Process).out
-error  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/g9g10_train.$(Cluster).$(Process).err
+log    = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/two_models/g9g10_train_transf2_runc.$(Cluster).$(Process).log
+output = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/two_models/g9g10_train_transf2_runc.$(Cluster).$(Process).out
+error  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/two_models/g9g10_train_transf2_runc.$(Cluster).$(Process).err
 
 executable = $(script)
 queue script from (
-  /lhome/ext/uovi156/uovi1562/gnn_dse_hls/pipeline/train_runc.sh
+  /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/pipeline/train_runc.sh
 )

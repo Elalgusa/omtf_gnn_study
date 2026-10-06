@@ -1,6 +1,6 @@
 universe    = vanilla
-initialdir  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls
-executable  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/pipeline/eval_das_filtered.sh
+initialdir  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study
+executable  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/pipeline/eval_das_filtered.sh
 should_transfer_files = NO
 getenv = True
 request_cpus   = 4
@@ -8,7 +8,7 @@ request_memory = 16G
 request_disk   = 4G
 request_gpus   = 1
 +UseNvidiaA100 = True
-log    = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/das_eval_filtered.$(Cluster).$(Process).log
-output = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/das_eval_filtered.$(Cluster).$(Process).out
-error  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/das_eval_filtered.$(Cluster).$(Process).err
+log    = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/das_eval_filtered.$(Cluster).$(Process).log
+output = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/das_eval_filtered.$(Cluster).$(Process).out
+error  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/das_eval_filtered.$(Cluster).$(Process).err
 queue

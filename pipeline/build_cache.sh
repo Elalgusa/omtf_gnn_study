@@ -3,6 +3,7 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+start=$(date +%s)
 exec "$ROOT_DIR/venv/bin/python" -u scripts/make_dataset.py \
     --data-dir   data/prod \
     --output-dir build/omtf_gmt/cache_v2_tps \
@@ -10,3 +11,5 @@ exec "$ROOT_DIR/venv/bin/python" -u scripts/make_dataset.py \
                  G4_pos G4_neg G5_pos G5_neg G6_pos G6_neg \
                  G7 G8 B4 \
     "$@"
+end=$(date +%s)
+echo "Total time: $((end - start)) seconds"

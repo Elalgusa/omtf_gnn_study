@@ -5,9 +5,12 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+start=$(date +%s)
 exec "$ROOT_DIR/venv/bin/python" -u scripts/make_dataset.py \
-    --data-dir   data/das_prod \
+    --data-dir   /lhome/ext/uovi156/uovi1562/gnn_dse_hls/data/das_prod \
     --output-dir build/omtf_gmt/cache_das_tps \
     --datasets   single_muon_flatpt displaced_lowpt displaced_midpt \
                  dy_prompt llp_addon minbias \
     "$@"
+end=$(date +%s)
+echo "Total time: $((end - start)) seconds"

@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import annotations
+
 """
 GMT model evaluation — Phase B1 eval suite.
 
@@ -35,8 +37,13 @@ Usage
       --threshold  0.0 \
       --output     build/omtf_gmt/eval/deepsets_B1a_eval.md
 """
-
-from __future__ import annotations
+## # INCLUIR introducción/explicación
+"""
+Sistema de comentarios:
+###   Cosas por hacer
+## #  Cosas por hacer (menos prioridad)
+## ## Sugerencias
+"""
 
 import argparse
 import json
@@ -55,7 +62,8 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "src"))
 
 from omtf_gmt.dataset import GMTCachedDataset, collate_gmt, expand_datasets
-from omtf_gmt.models import build_deepsets, build_edge_compat, build_slot_model, build_seq_slot, build_count_model, build_detr_model
+from omtf_gmt.models import build_deepsets, build_edge_compat, build_edge_compat_edges, build_edge_transf_edges, build_edge_transf2_edges, build_slot_model, build_seq_slot, build_count_model, build_detr_model
+from omtf_gmt.models_regression import build_regress_pt_charge
 
 
 ALL_DS        = ["S1", "S2", "S3", "S4", "S5", "B1", "B2", "B3", "B4"]
@@ -152,6 +160,7 @@ def load_model(ckpt_path: Path, device: torch.device):
     hdim = int(args.get("hidden", 64))
     dropout = float(args.get("dropout", 0.0))
 
+    # ---- classifier ----
     if mname == "deepsets":
         model = build_deepsets(hidden=hdim, dropout=dropout)
     elif mname == "edge_compat":
@@ -159,6 +168,12 @@ def load_model(ckpt_path: Path, device: torch.device):
     elif mname == "edge_compat_assign":
         from omtf_gmt.models.edge_compat_assign import build_edge_compat_assign
         model = build_edge_compat_assign(hidden=hdim, dropout=dropout)
+    elif mname == "edge_compat_edges":
+        model = build_edge_compat_edges(hidden=hdim, dropout=dropout)
+    elif mname == "edge_transf_edges":
+        model = build_edge_transf_edges(hidden=hdim, dropout=dropout)
+    elif mname == "edge_transf2_edges":
+        model = build_edge_transf2_edges(hidden=hdim, dropout=dropout)
     elif mname == "slot_model":
         model = build_slot_model(hidden=hdim, dropout=dropout)
     elif mname == "seq_slot":
@@ -167,6 +182,10 @@ def load_model(ckpt_path: Path, device: torch.device):
         model = build_count_model(hidden=hdim, dropout=dropout)
     elif mname == "detr_model":
         model = build_detr_model(hidden=hdim, dropout=dropout)
+    # ---- regression ----
+    elif mname == "regress_pt_charge":
+        model = build_regress_pt_charge(hidden=hdim, dropout=dropout)
+    
     else:
         raise ValueError(f"Unknown model type in checkpoint: {mname!r}")
 
@@ -192,9 +211,11 @@ def positive_pt(raw_pt: torch.Tensor) -> torch.Tensor:
 # Per-dataset validation-split evaluation                                     #
 # --------------------------------------------------------------------------- #
 
+## # Incluir el eval para charge y d0
 @torch.no_grad()
 def eval_dataset(
-    model,
+    classifier_model,
+    regression_model,
     cache_dir: Path,
     ds: str,
     threshold: float,
@@ -218,26 +239,27 @@ def eval_dataset(
     )
 
     # Stub-level accumulators.
-    n_sig_stubs = 0
-    n_noise_stubs = 0
+    n_sig_stubs    = 0
+    n_noise_stubs  = 0
     n_recall_stubs = 0
-    n_fake_stubs = 0
+    n_fake_stubs   = 0
 
     # Per-slot candidate stats.
-    slot_n_true = np.zeros(K_MAX, dtype=np.int64)
-    slot_n_rec = np.zeros(K_MAX, dtype=np.int64)
+    slot_n_true  = np.zeros(K_MAX, dtype=np.int64)
+    slot_n_rec   = np.zeros(K_MAX, dtype=np.int64)
     slot_n_false = np.zeros(K_MAX, dtype=np.int64)
-    slot_n_neg = np.zeros(K_MAX, dtype=np.int64)
+    slot_n_neg   = np.zeros(K_MAX, dtype=np.int64)
 
     # Candidate multiplicity confusion matrix: true multiplicity rows, predicted multiplicity columns.
-    # Indices 0..3 because K_MAX=3.
+    # Indices 0..2 because K_MAX=3.
     mult_conf = np.zeros((K_MAX + 1, K_MAX + 1), dtype=np.int64)
 
     # Efficiency vs pT and d0.
+    ### d0?????
     pt_true: list[float] = []
-    pt_rec: list[bool] = []
+    pt_rec: list[bool]   = []
     d0_true: list[float] = []
-    d0_rec: list[bool] = []
+    d0_rec: list[bool]   = []
 
     # pT regression residuals on positive slots.
     pt_rel_err: list[float] = []
@@ -245,8 +267,8 @@ def eval_dataset(
     pt_abs_err: list[float] = []
 
     # Zero-window stats.
-    n_zero_windows = 0
-    n_zero_fp = 0
+    n_zero_windows    = 0
+    n_zero_fp         = 0
     n_zero_fake_cands = 0
 
     # assignment diagnostics (only populated for edge_compat_assign)
@@ -270,14 +292,49 @@ def eval_dataset(
 
         stubs = batch["stubs"]
         vm = batch["valid_mask"]
-        nl = batch["node_label"]
+        if classifier_model.name == "edge_compat_edges":
+            N, Nmax, _ = stubs.shape
+            ndevice     = stubs.device
+            edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)                              # (N, Nmax, Nmax, F)
+            edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)                              # (N, Nmax, Nmax, F)
+            pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                        # (N, Nmax, Nmax)
+            no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=ndevice).unsqueeze(0)          # (1, Nmax, Nmax)
+            edge_mask  = pair_valid & no_self                                                     # (N, Nmax, Nmax)
+        elif (classifier_model.name == "edge_transf_edges" or classifier_model.name == "edge_transf2_edges"):
+            N, Nmax, _ = stubs.shape
+            ndevice     = stubs.device
+            edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)                              # (N, Nmax, Nmax, F)
+            edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)                              # (N, Nmax, Nmax, F)
+            pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                        # (N, Nmax, Nmax)
+            no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=ndevice).unsqueeze(0)          # (1, Nmax, Nmax)
+            edge_mask  = pair_valid & no_self                                                     # (N, Nmax, Nmax)
+            graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)                    # (E,)
+            src_node = graph_idx * Nmax + node1_idx
+            dst_node = graph_idx * Nmax + node2_idx
+            edge_index = torch.stack([src_node, dst_node], dim=0)                                 # (2, E)
+            edge_attr  = torch.cat([
+                                    edge_node1[graph_idx, node1_idx, node2_idx],
+                                    edge_node2[graph_idx, node1_idx, node2_idx],
+                                    ], dim=-1,)                                                   # (E, 2 * F)
+        nl  = batch["node_label"]
         gpt = batch["gen_pt"]
         gd0 = batch["gen_dxy"]
 
-        out = model(stubs, vm)
-        node_logit = out["node_logit"]
-        cand_logits = out["candidate_logits"]
-        pt_pred = positive_pt(out["pt_pred"])
+        # ---- classification ----
+        if classifier_model.name == "edge_compat_edges":
+            classifier_out  = classifier_model(stubs, vm, edge_node1, edge_node2, edge_mask)
+        elif (classifier_model.name == "edge_transf_edges" or classifier_model.name == "edge_transf2_edges"):
+            classifier_out  = classifier_model(stubs, vm, edge_index, edge_attr)
+        else:
+            classifier_out  = classifier_model(stubs, vm)
+        node_logit  = classifier_out["node_logit"]
+        cand_logits = classifier_out["candidate_logits"]
+        global_ctx  = classifier_out["global_ctx"]
+
+        # ---- regression ----
+        if regression_model.name == "regress_pt_charge":
+            regression_out = regression_model(global_ctx)
+        pt_pred = positive_pt(regression_out["pt_pred"])
 
         # ---- stub-level recall and fake rate ----
         nl_valid = nl[vm].bool()
@@ -342,8 +399,8 @@ def eval_dataset(
             n_zero_fake_cands += int(zero_fired.sum().item())
 
         # ---- assignment diagnostics (edge_compat_assign only) ----
-        if "assign_weights" in out:
-            aw = out["assign_weights"]          # (B, K, Nmax)
+        if "assign_weights" in classifier_out:
+            aw = classifier_out["assign_weights"]          # (B, K, Nmax)
             tid = batch["track_id"]             # (B, Nmax) int
             for k in range(K_MAX):
                 active = sig_slots[:, k]        # (B,) bool — slot has a real candidate
@@ -389,6 +446,7 @@ def eval_dataset(
                 b4_scan[tkey]["fake_cands"] += int(fired_thr.sum().item())
 
     # ---- Derived summaries ----
+    # ---- pT and d0 ----
     pt_arr = np.array(pt_true, dtype=np.float32)
     pt_rec_arr = np.array(pt_rec, dtype=bool)
     d0_arr = np.array(d0_true, dtype=np.float32)
@@ -443,6 +501,14 @@ def eval_dataset(
         "zero_win_mean_fake_cands": _safe_div(n_zero_fake_cands, n_zero_windows) if n_zero_windows > 0 else None,
         "n_zero_windows": n_zero_windows,
         "multiplicity_confusion": mult_conf.tolist(),
+        
+        "roc": roc,
+        "zero_threshold_scan": zero_scan,
+        "assign_purity":  (assign_purity_sum  / np.maximum(assign_n_slots, 1)).tolist(),
+        "assign_leakage": (assign_leakage_sum / np.maximum(assign_n_slots, 1)).tolist(),
+        "assign_noise":   (assign_noise_sum   / np.maximum(assign_n_slots, 1)).tolist(),
+    }, {
+        "ds": ds,
         "pt_efficiency": pt_eff,
         "d0_efficiency": d0_eff,
         "pt_metrics": {
@@ -453,11 +519,6 @@ def eval_dataset(
             "mae_log_pt": float(np.mean(np.abs(pt_log_np))) if pt_log_np.size else None,
             "sigma68_log_pt": _sigma68(pt_log_np),
         },
-        "roc": roc,
-        "zero_threshold_scan": zero_scan,
-        "assign_purity":  (assign_purity_sum  / np.maximum(assign_n_slots, 1)).tolist(),
-        "assign_leakage": (assign_leakage_sum / np.maximum(assign_n_slots, 1)).tolist(),
-        "assign_noise":   (assign_noise_sum   / np.maximum(assign_n_slots, 1)).tolist(),
     }
 
 
@@ -465,9 +526,10 @@ def eval_dataset(
 # Event-level trigger efficiency                                              #
 # --------------------------------------------------------------------------- #
 
+### MIRAR como invluir un estudio parecido para el pT, charge y displacement
 @torch.no_grad()
 def eval_event_level(
-    model,
+    classifier_model,
     cache_dir: Path,
     ds: str,
     threshold: float,
@@ -507,8 +569,35 @@ def eval_event_level(
             j = min(i + batch_size, n_samples)
             stubs = shard["stubs"][i:j].to(device)
             vm = shard["valid_mask"][i:j].to(device)
-            out = model(stubs, vm)
-            fires = (out["candidate_logits"] > threshold).any(dim=-1)
+            if classifier_model.name == "edge_compat_edges":
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+            elif (classifier_model.name == "edge_transf_edges" or classifier_model.name == "edge_transf2_edges"):
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)             # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                edge_index = torch.stack([src_node, dst_node], dim=0).to(device)               # (2, E)
+                edge_attr  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,)                                            # (E, 2 * F)
+            if classifier_model.name == "edge_compat_edges":
+                classifier_out = classifier_model(stubs, vm, edge_node1, edge_node2, edge_mask)
+            elif (classifier_model.name == "edge_transf_edges" or classifier_model.name == "edge_transf2_edges"):
+                classifier_out = classifier_model(stubs, vm, edge_index, edge_attr)
+            else:
+                classifier_out = classifier_model(stubs, vm)
+            fires = (classifier_out["candidate_logits"] > threshold).any(dim=-1)
             fires_list.append(fires.cpu())
 
         all_fires.append(torch.cat(fires_list))
@@ -681,24 +770,36 @@ def _combine_event_counts(ev_results: dict[str, dict[str, Any]], pt: int) -> tup
     ev_eff = _safe_div(ev_pass, ev_total) if ev_total else None
     return win_eff, ev_eff
 
-
 def render_report(
-    results: list[dict[str, Any]],
-    ev_results: dict[str, dict[str, Any]],
-    model_name: str,
-    hdim: int,
-    dropout: float,
-    ckpt_epoch: int | str,
-    best_loss: float,
+    classifier_results: list[dict[str, Any]],
+    regression_results: list[dict[str, Any]],
+    ev_classifier_results: dict[str, dict[str, Any]],
+    classifier_name: str,
+    regression_name: str,
+    classifier_hid: int,
+    regression_hid: int,
+    classifier_dropout: float,
+    regression_dropout: float,
+    classifier_ckpt_epoch: int | str,
+    regression_ckpt_epoch: int | str,
+    classifier_best_loss: float,
+    regression_best_loss: float,
     threshold: float,
-    ckpt_path: str,
+    classifier_ckpt_path: str,
+    regression_ckpt_path: str,
 ) -> str:
     lines: list[str] = [
-        "# GMT Model Evaluation\n",
-        f"Model: `{model_name}` hidden={hdim} dropout={dropout}  |  "
-        f"Checkpoint: `{ckpt_path}`  |  "
-        f"Best epoch: {ckpt_epoch}  best_val_loss: {best_loss:.4f}\n",
+        "# GMT Classifier Model Evaluation\n",
+        f"Model: `{classifier_name}` hidden={classifier_hid} dropout={classifier_dropout}  |  "
+        f"Checkpoint: `{classifier_ckpt_path}`  |  "
+        f"Best epoch: {classifier_ckpt_epoch}  best_val_loss: {classifier_best_loss:.4f}\n",
         f"Threshold: logit > {threshold:.2f}\n",
+        "**Scope:** Phase B1 cache-level evaluation. This is not yet a full absolute L1 trigger-rate study.\n",
+        "---\n",
+        "# GMT Regression Model Evaluation\n",
+        f"Model: `{regression_name}` hidden={regression_hid} dropout={regression_dropout}  |  "
+        f"Checkpoint: `{regression_ckpt_path}`  |  "
+        f"Best epoch: {regression_ckpt_epoch}  best_val_loss: {regression_best_loss:.4f}\n",
         "**Scope:** Phase B1 cache-level evaluation. This is not yet a full absolute L1 trigger-rate study.\n",
         "---\n",
     ]
@@ -709,7 +810,7 @@ def render_report(
         "| Dataset | Val samples | Stub recall | Stub fake | Cand eff | Neg-slot fake | Zero-win FP | Mean fake cands / zero win |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for r in results:
+    for r in classifier_results:
         zfp = _format_opt_float(r["zero_win_fp_rate"])
         zfc = _format_opt_float(r["zero_win_mean_fake_cands"])
         lines.append(
@@ -728,7 +829,7 @@ def render_report(
         "| Dataset | Eff slot 0 | Eff slot 1 | Eff slot 2 | Fake slot 0 | Fake slot 1 | Fake slot 2 |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for r in results:
+    for r in classifier_results:
         eff = r["slot_efficiency"]
         fake = r["slot_fake_rate"]
         eff_str = " | ".join(
@@ -745,7 +846,7 @@ def render_report(
     lines += [
         "Rows are true candidate multiplicity. Columns are predicted candidate multiplicity at the chosen threshold.\n"
     ]
-    for r in results:
+    for r in classifier_results:
         mat = np.array(r["multiplicity_confusion"], dtype=np.int64)
         lines += [f"### {r['ds']}\n"]
         lines += ["| true \\ pred | 0 | 1 | 2 | 3 |", "| --- | ---: | ---: | ---: | ---: |"]
@@ -759,7 +860,7 @@ def render_report(
         "| Dataset | N signal slots | MAE pT [GeV] | Median rel err | sigma68 rel err | MAE log(1+pT) | sigma68 log |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for r in results:
+    for r in regression_results:
         pm = r["pt_metrics"]
         lines.append(
             f"| {r['ds']} | {pm['n']:,} "
@@ -774,7 +875,7 @@ def render_report(
     # ---- pT efficiency ----
     lines += ["## Efficiency vs gen-muon pT  (all signal slots, all datasets pooled by counts)\n"]
     lines += ["| pT bin [GeV] | N true | N rec | Efficiency |", "| --- | ---: | ---: | ---: |"]
-    for b in _combine_bin_efficiencies(results, "pt_efficiency"):
+    for b in _combine_bin_efficiencies(regression_results, "pt_efficiency"):
         hi_str = f"{b['hi']}" if b["hi"] is not None else "∞"
         eff_s = _format_opt_float(b["efficiency"])
         lines.append(f"| [{b['lo']}, {hi_str}) | {b['n']:,} | {b['n_rec']:,} | {eff_s} |")
@@ -783,7 +884,7 @@ def render_report(
     # ---- d0 efficiency ----
     lines += ["## Efficiency vs gen-muon |d0|  (all signal slots, all datasets pooled by counts)\n"]
     lines += ["| |d0| bin [cm] | N true | N rec | Efficiency |", "| --- | ---: | ---: | ---: |"]
-    for b in _combine_bin_efficiencies(results, "d0_efficiency"):
+    for b in _combine_bin_efficiencies(regression_results, "d0_efficiency"):
         hi_str = f"{b['hi']}" if b["hi"] is not None else "∞"
         eff_s = _format_opt_float(b["efficiency"])
         lines.append(f"| [{b['lo']}, {hi_str}) | {b['n']:,} | {b['n_rec']:,} | {eff_s} |")
@@ -793,7 +894,7 @@ def render_report(
     lines += ["## Threshold scan  (slot-level ROC, all datasets pooled by counts)\n"]
     lines += ["| Threshold | Efficiency | Negative-slot fake rate | TP | FP | N pos | N neg |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     shown_thrs = {-2.0, -1.0, 0.0, 1.0, 2.0}
-    for point in _combine_roc_counts(results):
+    for point in _combine_roc_counts(classifier_results):
         t = round(float(point["threshold"]), 1)
         if t not in shown_thrs:
             continue
@@ -806,7 +907,7 @@ def render_report(
     # ---- Zero-candidate threshold scan ----
     lines += ["## Zero-candidate threshold scan  (B4 / zero-window diagnostics)\n"]
     lines += ["| Dataset | Threshold | Zero-window FP | Mean fake cands / zero window | Zero windows |", "| --- | ---: | ---: | ---: | ---: |"]
-    for r in results:
+    for r in classifier_results:
         if r["n_zero_windows"] <= 0:
             continue
         for point in r["zero_threshold_scan"]:
@@ -820,14 +921,14 @@ def render_report(
     lines.append("")
 
     # ---- Event-level trigger efficiency ----
-    if ev_results:
+    if ev_classifier_results:
         lines += ["## Event-level trigger efficiency\n"]
         lines += [
             "Window = any slot fires. Event = OR over all processor windows for that CMS event. "
             "File-boundary grouping is based on event-number reset.\n"
         ]
         lines += ["| Dataset | win@10 | evt@10 | gain | procs/evt | n_events | note |", "| --- | ---: | ---: | ---: | ---: | ---: | --- |"]
-        for ds, ev in ev_results.items():
+        for ds, ev in ev_classifier_results.items():
             mp = ev.get("mean_procs_per_event", 0.0)
             ne = ev.get("n_events", 0)
             if ds in ZERO_CAND_DS:
@@ -850,7 +951,7 @@ def render_report(
         lines += ["### Event-level trig_eff vs pT threshold  (all signal datasets pooled by counts)\n"]
         lines += ["| pT cut [GeV] | win_eff | evt_eff | gain |", "| ---: | ---: | ---: | ---: |"]
         for pt in PT_TRIG_THR:
-            win_eff, ev_eff = _combine_event_counts(ev_results, pt)
+            win_eff, ev_eff = _combine_event_counts(ev_classifier_results, pt)
             gain = (ev_eff - win_eff) if (win_eff is not None and ev_eff is not None) else None
             lines.append(
                 f"| > {pt} | {_format_opt_float(win_eff, 4)} | {_format_opt_float(ev_eff, 4)} | {_format_opt_float(gain, 4)} |"
@@ -866,7 +967,8 @@ def render_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="GMT model evaluation")
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--classifier-ckpt", type=Path, required=True)
+    parser.add_argument("--regression-ckpt", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=Path("build/omtf_gmt/cache"))
     parser.add_argument("--datasets", nargs="+", default=ALL_DS)
     parser.add_argument("--threshold", type=float, default=0.0)
@@ -876,61 +978,101 @@ def main() -> None:
     args = parser.parse_args()
 
     device = torch.device(args.device)
-    model, model_name, hidden_dim, dropout, epoch, best_loss = load_model(args.checkpoint, device)
-    n_params = sum(p.numel() for p in model.parameters())
+    # --- classification model ---
+    classifier_model, classifier_name, classifier_hid, classifier_dropout, classifier_epoch, classifier_best_loss = load_model(args.classifier_ckpt, device)
+    classifier_params = sum(p.numel() for p in classifier_model.parameters())
     print(
-        f"Model: {model_name} hidden={hidden_dim} dropout={dropout} "
-        f"params={n_params:,} epoch={epoch} best_val_loss={best_loss:.4f}"
+        f"Model: {classifier_name} hidden={classifier_hid} dropout={classifier_dropout} "
+        f"params={classifier_params:,} epoch={classifier_epoch} best_val_loss={classifier_best_loss:.4f}"
+    )
+
+    # --- regression model ---
+    regression_model, regression_name, regression_hid, regression_dropout, regression_epoch, regression_best_loss = load_model(args.regression_ckpt, device)
+    regression_params = sum(p.numel() for p in regression_model.parameters())
+    print(
+        f"Model: {regression_name} hidden={regression_hid} dropout={regression_dropout} "
+        f"params={regression_params:,} epoch={regression_epoch} best_val_loss={regression_best_loss:.4f}"
     )
 
     # Expand logical aliases (G1 → G1_pos, G1_neg) to physical cache names.
     datasets = expand_datasets(args.datasets)
 
     # Pass 1: validation-split metrics.
-    results: list[dict[str, Any]] = []
+    classifier_results: list[dict[str, Any]] = []
+    regression_results: list[dict[str, Any]] = []
     for ds in datasets:
         if not (args.cache_dir / ds).exists():
             print(f"  [{ds}] not in cache — skipping")
             continue
         print(f"  Evaluating {ds} ...", end="", flush=True)
-        r = eval_dataset(model, args.cache_dir, ds, args.threshold, device, args.batch_size)
-        results.append(r)
+        cr, rr = eval_dataset(classifier_model, regression_model, args.cache_dir, ds, args.threshold, device, args.batch_size)
+        classifier_results.append(cr)
+        regression_results.append(rr)
+        print("-"*50)
+        print("Classification")
         print(
-            f" n_val={r['n_val']:,} eff={r['overall_efficiency']:.3f} "
-            f"neg_fake={r['overall_fake_rate']:.3f} stub_fake={r['stub_fake_rate']:.3f}"
-            + (f" zero_fp={r['zero_win_fp_rate']:.3f}" if r["zero_win_fp_rate"] is not None else "")
+            f" n_val={cr['n_val']:,} eff={cr['overall_efficiency']:.3f} "
+            f"neg_fake={cr['overall_fake_rate']:.3f} stub_fake={cr['stub_fake_rate']:.3f}"
+            + (f" zero_fp={cr['zero_win_fp_rate']:.3f}" if cr["zero_win_fp_rate"] is not None else "")
         )
+        print("-"*50)
+        print("Regression")
+        ### Por qué algunos samples no tienen pt_metrics? (e.g. G7)
+        if rr["pt_metrics"]["n"]>0:
+            print(
+                ### f"pt_eff={rr['pt_efficiency']:.3f} d0_eff={rr['d0_efficiency']:.3f}"
+                f"pT Metrics: n={rr['pt_metrics']['n']:,} MAE Absolute pT={rr['pt_metrics']['mae_abs_pt']:.3f} MAE Log pT={rr['pt_metrics']['mae_log_pt']:.3f}"
+                f" Median Relative Error={rr['pt_metrics']['median_rel_err']:.3f}"
+                f" Sigma 68 Relative Error={rr['pt_metrics']['sigma68_rel_err']:.3f} Sigma 68 Log pT={rr['pt_metrics']['sigma68_log_pt']:.3f}"
+            )
+        else:
+            print(
+                ### f"pt_eff={rr['pt_efficiency']:.3f} d0_eff={rr['d0_efficiency']:.3f}"
+                f"pT Metrics: n={rr['pt_metrics']['n']:,} MAE Absolute pT={rr['pt_metrics']['mae_abs_pt']:} MAE Log pT={rr['pt_metrics']['mae_log_pt']:}"
+                f" Median Relative Error={rr['pt_metrics']['median_rel_err']:}"
+                f" Sigma 68 Relative Error={rr['pt_metrics']['sigma68_rel_err']:} Sigma 68 Log pT={rr['pt_metrics']['sigma68_log_pt']:}"
+            )
+        print("-"*50)
 
-    if not results:
+    if not classifier_results and not regression_results:
         print("No datasets found.")
         return
 
     # Pass 2: full-dataset event-level metrics.
+    ### INCLUIR un estudio similar para pT, charge y displacement
     print("\n  Event-level eval (full dataset, shard order):")
-    ev_results: dict[str, dict[str, Any]] = {}
+    ev_classifier_results: dict[str, dict[str, Any]] = {}
     for ds in datasets:
         if not (args.cache_dir / ds).exists():
             continue
         print(f"  {ds} ...", end="", flush=True)
-        ev_results[ds] = eval_event_level(
-            model,
+        ev_classifier_results[ds]= eval_event_level(
+            classifier_model,
             args.cache_dir,
             ds,
             args.threshold,
             device,
             args.batch_size,
         )
+        ### Hacer un ev_regression_results
 
     report = render_report(
-        results=results,
-        ev_results=ev_results,
-        model_name=model_name,
-        hdim=hidden_dim,
-        dropout=dropout,
-        ckpt_epoch=epoch,
-        best_loss=best_loss,
+        classifier_results=classifier_results,
+        regression_results=regression_results,
+        ev_classifier_results=ev_classifier_results,
+        classifier_name=classifier_name,
+        regression_name=regression_name,
+        classifier_hid=classifier_hid,
+        regression_hid=regression_hid,
+        classifier_dropout=classifier_dropout,
+        regression_dropout=regression_dropout,
+        classifier_ckpt_epoch=classifier_epoch,
+        regression_ckpt_epoch=regression_epoch,
+        classifier_best_loss=classifier_best_loss,
+        regression_best_loss=regression_best_loss,
         threshold=args.threshold,
-        ckpt_path=str(args.checkpoint),
+        classifier_ckpt_path=str(args.classifier_ckpt),
+        regression_ckpt_path=str(args.regression_ckpt)
     )
 
     print("\n" + report)
@@ -938,7 +1080,7 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report)
 
-    out_json = {"per_window": results, "event_level": ev_results}
+    out_json = {"classifier results per_window": classifier_results, "regression results per_window": regression_results, "event_level classifier results": ev_classifier_results}
     json_path = args.output.with_suffix(".json")
     json_path.write_text(json.dumps(out_json, indent=2))
 

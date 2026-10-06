@@ -7,16 +7,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 PYTHON="$ROOT_DIR/venv/bin/python"
 
-SRC="build/omtf_gmt/checkpoints/edge_compat_h64_tps_g9g10_runa"
-EVAL_SRC="build/omtf_gmt/eval/edge_compat_h64_tps_g9g10_runa_best_eval"
-FROZEN="build/omtf_gmt/checkpoints/frozen_fp32_tps_edgecompat_h64"
+SRC="/lhome/ext/uovi156/uovi1564/PelayoGNN/omtf_gnn_study/build/omtf_gmt/checkpoints/check/edge_transf2_edges_h64_tps_g9g10_runa"
+EVAL_SRC="/lhome/ext/uovi156/uovi1564/PelayoGNN/omtf_gnn_study/build/omtf_gmt/eval/runa/check/edge_transf2_edges/edge_transf2_edges_h64_tps_g9g10_runa_best_eval"
+FROZEN="build/omtf_gmt/checkpoints/check/frozen_fp32_tps_edgetransf2edges_h64"
 
 mkdir -p "$FROZEN"
-
+start=$(date +%s)
 echo "Copying model and training artefacts..."
-cp "$SRC/gmt_edge_compat_best.pt"   "$FROZEN/model.pt"
+cp "$SRC/gmt_edge_transf2_edges_best.pt"   "$FROZEN/model.pt"
 cp "$SRC/training_mix.json"          "$FROZEN/training_mix.json"
-cp "$SRC/gmt_edge_compat_history.json" "$FROZEN/history.json"
+cp "$SRC/gmt_edge_transf2_edges_history.json" "$FROZEN/history.json"
 cp "${EVAL_SRC}.md"                  "$FROZEN/eval.md"
 cp "${EVAL_SRC}.json"                "$FROZEN/eval.json"
 
@@ -32,17 +32,17 @@ cfg = {
     "nmax":           24,
     "k_max":          3,
 }
-json.dump(cfg, open("build/omtf_gmt/checkpoints/frozen_fp32_tps_edgecompat_h64/feature_config.json","w"), indent=2)
+json.dump(cfg, open("build/omtf_gmt/checkpoints/check/frozen_fp32_tps_edgetransf2edges_h64/feature_config.json","w"), indent=2)
 print("  feature_config.json written")
 PY
 
 echo "Copying cache manifest as dataset_manifest.json..."
-cp "build/omtf_gmt/cache_v2_tps/manifest.json" "$FROZEN/dataset_manifest.json"
+cp "/lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/omtf_gmt/cache_v2_tps/manifest.json" "$FROZEN/dataset_manifest.json"
 
 echo "Extracting threshold_scan.json from eval.json..."
 "$PYTHON" - <<'PY'
 import json
-ev = json.load(open("build/omtf_gmt/eval/edge_compat_h64_tps_g9g10_runa_best_eval.json"))
+ev = json.load(open("build/omtf_gmt/eval/runa/check/edge_transf2_edges/edge_transf2_edges_h64_tps_g9g10_runa_best_eval.json"))
 # Collect per-dataset threshold scans from per_window entries
 scan = {}
 for entry in ev.get("per_window", []):
@@ -51,7 +51,7 @@ for entry in ev.get("per_window", []):
         "zero_threshold_scan": entry.get("zero_threshold_scan", []),
         "roc":                 entry.get("roc", []),
     }
-json.dump(scan, open("build/omtf_gmt/checkpoints/frozen_fp32_tps_edgecompat_h64/threshold_scan.json","w"), indent=2)
+json.dump(scan, open("build/omtf_gmt/checkpoints/check/frozen_fp32_tps_edgetransf2edges_h64/threshold_scan.json","w"), indent=2)
 print("  threshold_scan.json written")
 PY
 
@@ -101,3 +101,5 @@ EOF
 echo ""
 echo "Frozen checkpoint written to: $FROZEN"
 ls -lh "$FROZEN"
+end=$(date +%s)
+echo "Total time: $((end - start)) seconds"

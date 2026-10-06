@@ -76,6 +76,15 @@ def load_model(ckpt_path: Path, device: torch.device):
     elif mname == "edge_compat_assign":
         from omtf_gmt.models.edge_compat_assign import build_edge_compat_assign
         model = build_edge_compat_assign(hidden=hdim, dropout=drop)
+    elif mname == "edge_compat_edges":
+        from omtf_gmt.models.edge_compat_edges import build_edge_compat_edges
+        model = build_edge_compat_edges(hidden=hdim, dropout=drop)
+    elif mname == "edge_transf_edges":
+        from omtf_gmt.models.edge_transf_edges import build_edge_transf_edges
+        model = build_edge_transf_edges(hidden=hdim, dropout=drop)
+    elif mname == "edge_transf2_edges":
+        from omtf_gmt.models.edge_transf2_edges import build_edge_transf2_edges
+        model = build_edge_transf2_edges(hidden=hdim, dropout=drop)
     elif mname == "deepsets":
         from omtf_gmt.models import build_deepsets
         model = build_deepsets(hidden=hdim, dropout=drop)
@@ -127,6 +136,7 @@ def eval_dataset_filtered(
                         collate_fn=collate_gmt, num_workers=2)
 
     is_bg = ds in BACKGROUND_DS
+    counter = 0
 
     # Window-level counters
     n_total          = 0
@@ -152,15 +162,60 @@ def eval_dataset_filtered(
     for batch in loader:
         stubs      = batch["stubs"].to(device)
         vm         = batch["valid_mask"].to(device)
-        nl         = batch["node_label"].to(device)
-        gpt        = batch["gen_pt"].to(device)
+        if model.name == "edge_compat_edges":
+            N, Nmax, _ = stubs.shape
+            ndevice     = stubs.device
+            edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)     # (N, Nmax, Nmax, F)
+            edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)     # (N, Nmax, Nmax, F)
+            pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                        # (N, Nmax, Nmax)
+            no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=ndevice).unsqueeze(0)                   # (1, Nmax, Nmax)
+            edge_mask  = pair_valid & no_self                            # (N, Nmax, Nmax)
+        elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+            N, Nmax, _ = stubs.shape
+            ndevice     = stubs.device
+            edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)     # (N, Nmax, Nmax, F)
+            edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)     # (N, Nmax, Nmax, F)
+            pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                        # (N, Nmax, Nmax)
+            no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=ndevice).unsqueeze(0)                   # (1, Nmax, Nmax)
+            edge_mask  = pair_valid & no_self                                     # (N, Nmax, Nmax)
+            graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)    # (E,)
+            src_node = graph_idx * Nmax + node1_idx
+            dst_node = graph_idx * Nmax + node2_idx
+            edge_index = torch.stack([src_node, dst_node], dim=0)        # (2, E)
+            edge_attr  = torch.cat([
+                                    edge_node1[graph_idx, node1_idx, node2_idx],
+                                    edge_node2[graph_idx, node1_idx, node2_idx],
+                                    ], dim=-1,)                                   # (E, 2 * F)
+        nl  = batch["node_label"].to(device)
+        gpt = batch["gen_pt"].to(device)
 
-        out        = model(stubs, vm)
+        if model.name == "edge_compat_edges":
+            out  = model(stubs, vm, edge_node1, edge_node2, edge_mask)
+        elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+            out  = model(stubs, vm, edge_index, edge_attr)
+        else:
+            out  = model(stubs, vm)
         logits     = out["candidate_logits"]          # (B, K)
         fires      = (logits > threshold).any(dim=-1) # (B,)
-        max_logit  = logits.max(dim=-1).values         # (B,)
+        max_logit  = logits.max(dim=-1).values        # (B,)
+        if counter == 0:
+            #print("\nlogits ", logits)
+            #print("fires ", fires)
+            print("\nstubs shape", stubs.size())
+            print("logits shape", logits.size())
+            print("fires shape", fires.size())
+            print("threshold ", threshold)
+            for i in range(logits.size(0)):
+                if (logits[i][2]>=0 and logits[i][0]<0 and logits[i][1]<0):
+                    print("logits", logits[i])
+            for i in range(fires.size(0)):
+                if (fires[i] == True and (logits[i][1]>=0 or logits[i][2]>=0) and logits[i][0]<0):
+                    print("logits that fire ", logits[i])
+                    
+            print()
+            counter += 1
 
-        has_tgt    = (gpt.max(dim=-1).values > 0)     # (B,)
+        has_tgt    = (gpt.max(dim=-1).values > 0)        # (B,)
         ov_sig     = overlap_signal_mask(stubs, nl, vm)  # (B,)
 
         # Categorise windows
@@ -179,7 +234,7 @@ def eval_dataset_filtered(
 
         # pT efficiency (overlap signal windows only)
         if not is_bg:
-            gpt_max = gpt.max(dim=-1).values.cpu().numpy()
+            gpt_max  = gpt.max(dim=-1).values.cpu().numpy()
             fires_np = fires.cpu().numpy()
             ov_np    = ov_sig_w.cpu().numpy()
             for bi_lo, bi_hi, pt_lo, pt_hi in zip(
@@ -265,6 +320,7 @@ def eval_event_level_filtered(
 
     all_fires:   list[torch.Tensor] = []
     all_ov_sig:  list[torch.Tensor] = []
+    all_ov_10pt: list[torch.Tensor] = []
     all_has_tgt: list[torch.Tensor] = []
     all_gpt_max: list[torch.Tensor] = []
     all_en:      list[torch.Tensor] = []
@@ -273,15 +329,43 @@ def eval_event_level_filtered(
         shard = torch.load(sp, map_location="cpu", weights_only=False)
         n = int(shard["stubs"].shape[0])
         fires_l, ov_l, tgt_l = [], [], []
+        #print("shard keys:", shard.keys())
 
         for i in range(0, n, batch_size):
             j = min(i + batch_size, n)
             stubs = shard["stubs"][i:j].to(device)
             vm    = shard["valid_mask"][i:j].to(device)
+            if model.name == "edge_compat_edges":
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+            elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+                N, Nmax, _ = stubs.shape
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1).to(device)            # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1).to(device)            # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                                 # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool, device=device).unsqueeze(0)    # (1, Nmax, Nmax)
+                edge_mask  = (pair_valid & no_self).to(device)                                 # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)             # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                edge_index = torch.stack([src_node, dst_node], dim=0).to(device)               # (2, E)
+                edge_attr  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,).to(device)                                 # (E, 2 * F)
             nl    = shard["node_label"][i:j].to(device)
             gpt_b = shard["gen_pt"][i:j].to(device)
-
-            out    = model(stubs, vm)
+            
+            if model.name == "edge_compat_edges":
+                out = model(stubs, vm, edge_node1, edge_node2, edge_mask)
+            elif (model.name == "edge_transf_edges" or model.name == "edge_transf2_edges"):
+                out = model(stubs, vm, edge_index, edge_attr)
+            else:
+                out = model(stubs, vm)
             fires  = (out["candidate_logits"] > threshold).any(dim=-1).cpu()
             ov_sig = overlap_signal_mask(stubs, nl, vm).cpu()
             has_t  = (gpt_b.max(dim=-1).values > 0).cpu()

@@ -107,7 +107,7 @@ def build_node_features(
                         abs_e - ETA_OVERLAP_LO,
                         np.where(in_ov, 0.0, abs_e - ETA_OVERLAP_HI)).astype(np.float32)
 
-    X[:, F_PHI_REL]           = phi_rel.astype(np.float32)
+    X[:, F_PHI_REL]            = phi_rel.astype(np.float32)
     X[:, F_COORD2]             = coord2.astype(np.float32)
     X[:, F_ETA1]               = eta1.astype(np.float32)
     X[:, F_ETA2]               = (eta2 * has_eta2).astype(np.float32)

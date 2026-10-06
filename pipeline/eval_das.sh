@@ -7,6 +7,7 @@ PYTHON="$ROOT_DIR/venv/bin/python"
 CKPT="build/omtf_gmt/checkpoints/frozen_fp32_tps_edgecompat_h64/model.pt"
 EVALDIR="build/omtf_gmt/eval"
 
+start=$(date +%s)
 echo "=== EVAL frozen model on DAS datasets ==="
 "$PYTHON" -u scripts/eval.py \
     --checkpoint "$CKPT" \
@@ -16,3 +17,5 @@ echo "=== EVAL frozen model on DAS datasets ==="
     --threshold  0.0 \
     --output     "$EVALDIR/frozen_fp32_das_eval.md" \
     --device     cuda
+end=$(date +%s)
+echo "Total time: $((end - start)) seconds"

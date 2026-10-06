@@ -1,12 +1,12 @@
 universe    = vanilla
-initialdir  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls
-executable  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/pipeline/build_das_cache.sh
+initialdir  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study
+executable  =/lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/pipeline/build_das_cache.sh
 should_transfer_files = NO
 getenv = True
 request_cpus   = 4
 request_memory = 16G
 request_disk   = 8G
-log    = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/das_dataset.$(Cluster).$(Process).log
-output = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/das_dataset.$(Cluster).$(Process).out
-error  = /lhome/ext/uovi156/uovi1562/gnn_dse_hls/build/condor/das_dataset.$(Cluster).$(Process).err
+log    = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/das_dataset.$(Cluster).$(Process).log
+output = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/das_dataset.$(Cluster).$(Process).out
+error  = /lhome/ext/uovi156/uovi1564/GNN/omtf_gnn_study/build/condor/das_dataset.$(Cluster).$(Process).err
 queue

@@ -37,7 +37,7 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "src"))
 
 from omtf_gmt.dataset import GMTCachedDataset, collate_gmt, expand_datasets, expand_repeats
-from omtf_gmt.models  import build_deepsets, build_edge_compat, build_edge_compat_assign, build_slot_model, build_seq_slot, build_count_model, build_detr_model
+from omtf_gmt.models  import build_deepsets, build_edge_compat, build_edge_compat_assign, build_edge_compat_edges, build_edge_transf_edges, build_edge_transf2_edges, build_slot_model, build_seq_slot, build_count_model, build_detr_model
 from omtf_gmt.models.edge_compat_assign import assignment_supervision_loss
 from omtf_gmt.models.slot_model import (
     candidate_count_loss,
@@ -46,10 +46,9 @@ from omtf_gmt.models.slot_model import (
     attention_supervision_loss,
 )
 
-K_MAX        = 3
+K_MAX          = 3
 ALL_DATASETS   = ["S1", "S2", "S3", "S4", "S5", "B1", "B2", "B3", "B4"]
 ALL_G_DATASETS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "B4"]
-
 
 # --------------------------------------------------------------------------- #
 # Loss
@@ -60,7 +59,6 @@ def compute_loss(
     batch:  dict[str, torch.Tensor],
     w_node:           float = 1.0,
     w_cand:           float = 1.0,
-    w_pt:             float = 0.5,
     w_count:          float = 0.0,
     w_div:            float = 0.0,
     w_null:           float = 0.0,
@@ -96,21 +94,11 @@ def compute_loss(
         out["candidate_logits"], cand_target, reduction="mean"
     )
 
-    # pT regression (log-space MSE, signal slots only)
-    sig_mask = cand_target > 0.5
-    pt_loss  = torch.tensor(0.0, device=node_logit.device)
-    if sig_mask.any():
-        pt_pred_pos = out["pt_pred"]   # models apply F.softplus internally
-        pt_loss = F.mse_loss(
-            torch.log1p(pt_pred_pos[sig_mask]),
-            torch.log1p(gpt[sig_mask]),
-        )
 
-    total = w_node * node_loss + w_cand * cand_loss + w_pt * pt_loss
+    total = w_node * node_loss + w_cand * cand_loss
     breakdown = {
         "node_loss": node_loss.item(),
         "cand_loss": cand_loss.item(),
-        "pt_loss":   pt_loss.item(),
     }
 
     # explicit hard-negative candidate loss: push all slots negative for G7/G8/G9/G10 windows
@@ -179,11 +167,9 @@ def compute_loss(
     breakdown["loss"] = total.item()
     return total, breakdown
 
-
 # --------------------------------------------------------------------------- #
 # DETR Hungarian matching loss
 # --------------------------------------------------------------------------- #
-
 
 # All K! permutations of K slot indices, precomputed as a module-level constant.
 # K=3 → 6 permutations. Used by detr_loss for vectorised matching.
@@ -196,9 +182,7 @@ def detr_loss(
     out:        dict,
     batch:      dict,
     w_node:     float = 1.0,
-    w_pt:       float = 0.5,
     w_no_obj:   float = 0.1,
-    w_pt_match: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Permutation-invariant loss via exhaustive permutation search (fully on GPU).
@@ -215,7 +199,6 @@ def detr_loss(
     nl          = batch["node_label"]
     gpt         = batch["gen_pt"]           # (N, K)  — 0 for null slots
     cand_logits = out["candidate_logits"]   # (N, K)
-    pt_pred     = out["pt_pred"]    # models apply F.softplus internally
     node_logit  = out["node_logit"]
 
     N, K   = cand_logits.shape
@@ -232,11 +215,7 @@ def detr_loss(
     bce_obj    = -F.logsigmoid(cand_logits)                   # (N, K)  cost: predict object
     bce_no_obj = -F.logsigmoid(-cand_logits)                  # (N, K)  cost: predict no-object
 
-    log_pt_pred = torch.log1p(pt_pred)                        # (N, K)
-    log_pt_true = torch.log1p(gpt)                            # (N, K)
-    pt_cost = (log_pt_pred.unsqueeze(2) - log_pt_true.unsqueeze(1)).abs()  # (N, K, K)
-
-    real_cost = bce_obj.unsqueeze(2) + w_pt_match * pt_cost   # (N, K, K)
+    real_cost = bce_obj.unsqueeze(2)                          # (N, K, K)
     null_cost = w_no_obj * bce_no_obj.unsqueeze(2).expand(N, K, K)
 
     # is_real indexed over target axis j: (N, 1, K) → (N, K, K)
@@ -263,7 +242,6 @@ def detr_loss(
 
     # ---- compute training loss using best assignment ----
     is_real_matched = is_real.gather(1, target_idx)           # (N, K)
-    gpt_matched     = gpt.gather(1, target_idx)               # (N, K)
 
     # BCE: target=1 for real, target=0 for null; null slots down-weighted
     cand_targets = is_real_matched.float()
@@ -277,19 +255,11 @@ def detr_loss(
         * cand_weights
     ).mean()
 
-    # pT MSE (real matched slots only)
-    pt_loss_mat = F.mse_loss(
-        torch.log1p(pt_pred), torch.log1p(gpt_matched), reduction="none"
-    )
-    n_real  = is_real_matched.float().sum().clamp(min=1.0)
-    pt_loss = (pt_loss_mat * is_real_matched.float()).sum() / n_real
-
-    total = w_node * node_loss + cand_loss + w_pt * pt_loss
+    total = w_node * node_loss + cand_loss 
 
     breakdown = {
         "node_loss": node_loss.item(),
         "cand_loss": cand_loss.item(),
-        "pt_loss":   pt_loss.item(),
         "loss":      total.item(),
     }
     return total, breakdown
@@ -355,7 +325,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--repeat",       nargs="*", default=["B4:8"], metavar="DS:N",
                    help="per-dataset train-split repeat factors, e.g. --repeat B4:8 S4:2")
     p.add_argument("--model",        default="deepsets",
-                   choices=["deepsets", "edge_compat", "edge_compat_assign",
+                   choices=["deepsets", "edge_compat", "edge_compat_assign", "edge_compat_edges", "edge_transf_edges", "edge_transf2_edges",
                             "slot_model", "seq_slot", "count_model", "detr_model"])
     p.add_argument("--hidden",       type=int,   default=64)
     p.add_argument("--dropout",      type=float, default=0.0)
@@ -364,7 +334,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr",           type=float, default=1e-3)
     p.add_argument("--w-node",       type=float, default=1.0)
     p.add_argument("--w-cand",       type=float, default=1.0)
-    p.add_argument("--w-pt",         type=float, default=0.5)
     p.add_argument("--w-count",      type=float, default=0.0,
                    help="candidate-count MSE loss weight (slot_model only)")
     p.add_argument("--w-div",        type=float, default=0.0,
@@ -395,6 +364,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    counter = 0
     args   = parse_args()
     device = torch.device(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -488,6 +458,12 @@ def main() -> None:
         model = build_edge_compat(hidden=args.hidden, dropout=args.dropout)
     elif args.model == "edge_compat_assign":
         model = build_edge_compat_assign(hidden=args.hidden, dropout=args.dropout)
+    elif args.model == "edge_compat_edges":
+        model = build_edge_compat_edges(hidden=args.hidden, dropout=args.dropout)
+    elif args.model == "edge_transf_edges":
+        model = build_edge_transf_edges(hidden=args.hidden, dropout=args.dropout)
+    elif args.model == "edge_transf2_edges":
+        model = build_edge_transf2_edges(hidden=args.hidden, dropout=args.dropout)
     elif args.model == "slot_model":
         model = build_slot_model(hidden=args.hidden, dropout=args.dropout)
     elif args.model == "seq_slot":
@@ -501,7 +477,7 @@ def main() -> None:
     print(f"Model: {args.model}  params={n_params:,}")
 
     opt    = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+    scaler = torch.amp.GradScaler('cuda', enabled=args.amp)
 
     scheduler = None
     if args.scheduler == "cosine":
@@ -524,17 +500,66 @@ def main() -> None:
         tr_loss    = 0.0
         tr_hn_loss = 0.0
         for batch in train_loader:
+            if counter == 0:
+                print("Batch type:", type(batch))
+                print("Batch keys:", batch.keys())
             batch = {k: v.to(device, non_blocking=pin) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
-            with torch.cuda.amp.autocast(enabled=args.amp):
-                out  = model(batch["stubs"], batch["valid_mask"])
-                if args.model == "detr_model":
-                    loss, bd = detr_loss(out, batch, args.w_node, args.w_pt, args.w_no_obj)
+            if args.model == "edge_compat_edges":
+                stubs = batch["stubs"]                                                # (N, Nmax, F)
+                vm    = batch["valid_mask"]                                           # (N, Nmax)
+                N, Nmax, _ = stubs.shape
+                device     = stubs.device
+                batch["edge_node1"] = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)     # (N, Nmax, Nmax, F)
+                batch["edge_node2"] = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)     # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                        # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool,
+                                        device=device).unsqueeze(0)                   # (1, Nmax, Nmax)
+                batch["edge_mask"]  = pair_valid & no_self                            # (N, Nmax, Nmax)
+            elif (args.model == "edge_transf_edges" or args.model == "edge_transf2_edges"):
+                stubs = batch["stubs"]                                                # (N, Nmax, F)
+                vm    = batch["valid_mask"]                                           # (N, Nmax)
+                N, Nmax, _ = stubs.shape
+                device     = stubs.device
+                edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)              # (N, Nmax, Nmax, F)
+                edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)              # (N, Nmax, Nmax, F)
+                pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                        # (N, Nmax, Nmax)
+                no_self    = ~torch.eye(Nmax, dtype=torch.bool,
+                                        device=device).unsqueeze(0)                   # (1, Nmax, Nmax)
+                edge_mask  = pair_valid & no_self                                     # (N, Nmax, Nmax)
+                graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)    # (E,)
+                src_node = graph_idx * Nmax + node1_idx
+                dst_node = graph_idx * Nmax + node2_idx
+                batch["edge_index"] = torch.stack([src_node, dst_node], dim=0)        # (2, E)
+                batch["edge_attr"]  = torch.cat([
+                                        edge_node1[graph_idx, node1_idx, node2_idx],
+                                        edge_node2[graph_idx, node1_idx, node2_idx],
+                                        ], dim=-1,)                                   # (E, 2 * F)
+            if counter == 0:
+                print("Batch type:", type(batch))
+                print("Batch keys:", batch.keys())
+            with torch.amp.autocast('cuda', enabled=args.amp):
+                if args.model == "edge_compat_edges":
+                    out = model(batch["stubs"], batch["valid_mask"], batch["edge_node1"], batch["edge_node2"], batch["edge_mask"])
+                elif (args.model == "edge_transf_edges" or args.model == "edge_transf2_edges"):
+                    out = model(batch["stubs"], batch["valid_mask"], batch["edge_index"], batch["edge_attr"])
                 else:
-                    loss, bd = compute_loss(out, batch, args.w_node, args.w_cand, args.w_pt,
+                    out  = model(batch["stubs"], batch["valid_mask"])
+                if args.model == "detr_model":
+                    loss, bd = detr_loss(out, batch, args.w_node, args.w_no_obj)
+                else:
+                    loss, bd = compute_loss(out, batch, args.w_node, args.w_cand,
                                        args.w_count, args.w_div, args.w_null, args.w_attn,
                                        args.w_hard_neg, args.unmatched_stub_weight,
                                        args.w_assign)
+            if counter == 0:
+                counter += 1
+                print("node logit", out["node_logit"])
+                print("candidate logit", out["candidate_logits"])
+                print("len node logit", out["node_logit"].size())
+                print("len candidate logit", out["candidate_logits"].size())
+                print("out type", type(out))
+                print("out keys", out.keys())
             opt.zero_grad()
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
@@ -559,12 +584,47 @@ def main() -> None:
             for batch in val_loader:
                 batch = {k: v.to(device, non_blocking=pin) if isinstance(v, torch.Tensor) else v
                          for k, v in batch.items()}
-                with torch.cuda.amp.autocast(enabled=args.amp):
-                    out  = model(batch["stubs"], batch["valid_mask"])
-                    if args.model == "detr_model":
-                        loss, _ = detr_loss(out, batch, args.w_node, args.w_pt, args.w_no_obj)
+                if args.model == "edge_compat_edges":
+                    stubs = batch["stubs"]                                                # (N, Nmax, F)
+                    vm    = batch["valid_mask"]                                           # (N, Nmax)
+                    N, Nmax, _ = stubs.shape
+                    device     = stubs.device
+                    batch["edge_node1"] = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)     # (N, Nmax, Nmax, F)
+                    batch["edge_node2"] = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)     # (N, Nmax, Nmax, F)
+                    pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                        # (N, Nmax, Nmax)
+                    no_self    = ~torch.eye(Nmax, dtype=torch.bool,
+                                            device=device).unsqueeze(0)                   # (1, Nmax, Nmax)
+                    batch["edge_mask"]  = pair_valid & no_self                            # (N, Nmax, Nmax)
+                elif (args.model == "edge_transf_edges" or args.model == "edge_transf2_edges"):
+                    stubs = batch["stubs"]                                                # (N, Nmax, F)
+                    vm    = batch["valid_mask"]                                           # (N, Nmax)
+                    N, Nmax, _ = stubs.shape
+                    device     = stubs.device
+                    edge_node1 = stubs.unsqueeze(2).expand(-1, -1, Nmax, -1)     # (N, Nmax, Nmax, F)
+                    edge_node2 = stubs.unsqueeze(1).expand(-1, Nmax, -1, -1)     # (N, Nmax, Nmax, F)
+                    pair_valid = vm.unsqueeze(2) & vm.unsqueeze(1)                        # (N, Nmax, Nmax)
+                    no_self    = ~torch.eye(Nmax, dtype=torch.bool,
+                                            device=device).unsqueeze(0)                   # (1, Nmax, Nmax)
+                    edge_mask  = pair_valid & no_self                                     # (N, Nmax, Nmax)
+                    graph_idx, node1_idx, node2_idx = edge_mask.nonzero(as_tuple=True)    # (E,)
+                    src_node = graph_idx * Nmax + node1_idx
+                    dst_node = graph_idx * Nmax + node2_idx
+                    batch["edge_index"] = torch.stack([src_node, dst_node], dim=0)        # (2, E)
+                    batch["edge_attr"]  = torch.cat([
+                                            edge_node1[graph_idx, node1_idx, node2_idx],
+                                            edge_node2[graph_idx, node1_idx, node2_idx],
+                                            ], dim=-1,)                                   # (E, 2 * F)
+                with torch.amp.autocast('cuda', enabled=args.amp):
+                    if args.model == "edge_compat_edges":
+                        out  = model(batch["stubs"], batch["valid_mask"], batch["edge_node1"], batch["edge_node2"], batch["edge_mask"])
+                    elif (args.model == "edge_transf_edges" or args.model == "edge_transf2_edges"):
+                        out = model(batch["stubs"], batch["valid_mask"], batch["edge_index"], batch["edge_attr"])
                     else:
-                        loss, _ = compute_loss(out, batch, args.w_node, args.w_cand, args.w_pt,
+                        out  = model(batch["stubs"], batch["valid_mask"])
+                    if args.model == "detr_model":
+                        loss, _ = detr_loss(out, batch, args.w_node, args.w_no_obj)
+                    else:
+                        loss, _ = compute_loss(out, batch, args.w_node, args.w_cand,
                                        args.w_count, args.w_div, args.w_null, args.w_attn,
                                        args.w_hard_neg, args.unmatched_stub_weight,
                                        args.w_assign)
